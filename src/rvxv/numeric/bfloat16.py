@@ -40,6 +40,13 @@ class BFloat16(CustomFloat):
         if math.isinf(value):
             return 0xFF80 if value < 0 else 0x7F80
 
+        # Clamp values outside FP32 range to ±infinity before packing
+        max_fp32 = 3.4028235e+38
+        if value > max_fp32:
+            return 0x7F80  # +inf
+        if value < -max_fp32:
+            return 0xFF80  # -inf
+
         # Get FP32 bits
         fp32_bits = struct.unpack('>I', struct.pack('>f', value))[0]
 
