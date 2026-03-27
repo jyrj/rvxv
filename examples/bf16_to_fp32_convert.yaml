@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../src/rvxv/schema/instruction_spec.schema.json
+#
+# Example: BF16 to FP32 widening conversion
+# Converts BF16 vector elements to FP32 — a common operation when
+# mixed-precision inference needs to upcast activations for higher-precision
+# accumulation or comparison stages.
+#
+# Usage: rvxv generate --spec bf16_to_fp32_convert.yaml --output ./build/
+
+name: vfwcvt_f_bf16
+description: "BF16 to FP32 widening conversion"
+encoding:
+  format: vector
+  opcode: 0x5b
+  funct3: 0x1
+  funct6: 0x12  # bits[31:26], vm bit[25] is separate
+operands:
+  vs2: { type: vector, element: bf16 }
+  vd:  { type: vector, element: fp32 }
+semantics:
+  operation: convert
+  accumulate: false
+  saturation: none
+constraints:
+  vl_dependent: true
+  mask_agnostic: true
+  tail_agnostic: true

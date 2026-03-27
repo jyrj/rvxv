@@ -1,0 +1,102 @@
+# Common AI operations — RVXV preset specifications
+# These represent the most frequently needed custom AI instructions
+# across RISC-V accelerator designs.
+
+- name: vdot4_i8i8_acc32
+  description: "4-way INT8 dot product with INT32 accumulation"
+  encoding:
+    format: vector
+    opcode: 0x5b  # custom-2
+    funct3: 0x0
+    funct6: 0x20  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: int8, groups: 4 }
+    vs1: { type: vector, element: int8, groups: 4 }
+    vd:  { type: vector, element: int32 }
+  semantics:
+    operation: dot_product
+    accumulate: true
+    saturation: none
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: vfmacc_bf16
+  description: "BF16 fused multiply-accumulate with FP32 accumulation"
+  encoding:
+    format: vector
+    opcode: 0x5b
+    funct3: 0x1
+    funct6: 0x20  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: bf16 }
+    vs1: { type: vector, element: bf16 }
+    vd:  { type: vector, element: fp32 }
+  semantics:
+    operation: fma
+    accumulate: true
+    rounding: rne
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: vdot4_fp8e4m3_acc32
+  description: "4-way FP8 E4M3 dot product with FP32 accumulation"
+  encoding:
+    format: vector
+    opcode: 0x5b
+    funct3: 0x2
+    funct6: 0x21  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: fp8_e4m3, groups: 4 }
+    vs1: { type: vector, element: fp8_e4m3, groups: 4 }
+    vd:  { type: vector, element: fp32 }
+  semantics:
+    operation: dot_product
+    accumulate: true
+    rounding: rne
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: vfexp_bf16
+  description: "Fused exponential (for softmax) on BF16 elements"
+  encoding:
+    format: vector
+    opcode: 0x5b
+    funct3: 0x3
+    funct6: 0x21  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: bf16 }
+    vd:  { type: vector, element: bf16 }
+  semantics:
+    operation: fused_exp
+    accumulate: false
+    rounding: rne
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: vmac_i4i4_acc32
+  description: "INT4 packed multiply-accumulate with INT32 accumulation"
+  encoding:
+    format: vector
+    opcode: 0x5b
+    funct3: 0x4
+    funct6: 0x22  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: int4, groups: 8 }
+    vs1: { type: vector, element: int4, groups: 8 }
+    vd:  { type: vector, element: int32 }
+  semantics:
+    operation: dot_product
+    accumulate: true
+    saturation: signed
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true

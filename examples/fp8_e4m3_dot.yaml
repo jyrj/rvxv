@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=../src/rvxv/schema/instruction_spec.schema.json
+#
+# Example: FP8 E4M3 4-way dot product with FP32 accumulation
+# Used in next-gen AI accelerators (NVIDIA H100-style) for
+# ultra-low precision inference. Key challenge: E4M3 has NO infinity,
+# so overflow saturates to ±448.0 instead of ±∞.
+#
+# Usage: rvxv generate --spec fp8_e4m3_dot.yaml --output ./build/
+
+name: vdot4_fp8e4m3_acc32
+description: "4-way FP8 E4M3 dot product with FP32 accumulation"
+encoding:
+  format: vector
+  opcode: 0x5b
+  funct3: 0x2
+  funct6: 0x21  # bits[31:26], vm bit[25] is separate
+operands:
+  vs2: { type: vector, element: fp8_e4m3, groups: 4 }
+  vs1: { type: vector, element: fp8_e4m3, groups: 4 }
+  vd:  { type: vector, element: fp32 }
+semantics:
+  operation: dot_product
+  accumulate: true
+  rounding: rne
+constraints:
+  vl_dependent: true
+  mask_agnostic: true
+  tail_agnostic: true

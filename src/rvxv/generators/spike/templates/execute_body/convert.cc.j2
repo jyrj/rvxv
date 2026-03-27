@@ -1,0 +1,50 @@
+{# ---------------------------------------------------------------------------
+   CONVERT execute body
+
+   Type conversion between source and destination element types.
+   For AI types, uses the appropriate conversion helpers.
+   Uses real Spike vector API with proper vstart/vl/mask handling.
+--------------------------------------------------------------------------- #}
+{
+  const reg_t vl = P.VU.vl->read();
+  const reg_t vstart_val = P.VU.vstart->read();
+  const bool masked = insn.v_vm() == 0;
+  const reg_t rd_num = insn.rd();
+  const reg_t rs2_num = insn.rs2();
+
+  // Convert: {{ sources[0].name }} ({{ sources[0].c_type }}) -> {{ dest.name }} ({{ dest.c_type }})
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+{% if sources[0].needs_conv and dest.needs_conv %}
+    // Both source and dest are AI types -- convert through float
+    float val = {{ sources[0].to_f32 }}(P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i));
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = {{ dest.from_f32 }}(val);
+{% elif sources[0].needs_conv %}
+    // Source is AI type, dest is native
+    float val = {{ sources[0].to_f32 }}(P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i));
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = ({{ dest.c_type }})val;
+{% elif dest.needs_conv %}
+    // Source is native, dest is AI type
+    {{ sources[0].c_type }} val = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = {{ dest.from_f32 }}((float)val);
+{% else %}
+    // Both types are native -- direct cast
+    {{ sources[0].c_type }} val = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+{% if saturation == "signed" %}
+    {{ dest.c_type }} result = ({{ dest.c_type }})val;
+    if (result > INT{{ dest.width_bits }}_MAX) result = INT{{ dest.width_bits }}_MAX;
+    if (result < INT{{ dest.width_bits }}_MIN) result = INT{{ dest.width_bits }}_MIN;
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = result;
+{% elif saturation == "unsigned" %}
+    {{ dest.c_type }} result = ({{ dest.c_type }})val;
+    if (result > UINT{{ dest.width_bits }}_MAX) result = UINT{{ dest.width_bits }}_MAX;
+    if (result < 0) result = 0;
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = result;
+{% else %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = ({{ dest.c_type }})val;
+{% endif %}
+{% endif %}
+  }
+  P.VU.vstart->write(0);
+}

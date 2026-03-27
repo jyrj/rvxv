@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../src/rvxv/schema/instruction_spec.schema.json
+#
+# Example: BF16 Fused Multiply-Accumulate with FP32 accumulation
+# Common in transformer inference — BF16 weights × BF16 activations
+# accumulated into FP32 to maintain numeric precision.
+#
+# Usage: rvxv generate --spec bf16_fma.yaml --output ./build/
+
+name: vfmacc_bf16
+description: "BF16 fused multiply-accumulate with FP32 accumulation"
+encoding:
+  format: vector
+  opcode: 0x5b
+  funct3: 0x1
+  funct6: 0x20  # bits[31:26], vm bit[25] is separate
+operands:
+  vs2: { type: vector, element: bf16 }
+  vs1: { type: vector, element: bf16 }
+  vd:  { type: vector, element: fp32 }
+semantics:
+  operation: fma
+  accumulate: true
+  rounding: rne
+constraints:
+  vl_dependent: true
+  mask_agnostic: true
+  tail_agnostic: true

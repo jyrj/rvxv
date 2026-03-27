@@ -1,0 +1,82 @@
+# Custom 4-element dot product instructions (inspired by proposed matrix dot-product operations)
+# Uses custom-1 opcode space (0x2b)
+
+- name: vqdot.vv
+  description: "4-element signed dot product (INT8×INT8→INT32)"
+  encoding:
+    format: vector
+    opcode: 0x2b  # custom-1
+    funct3: 0x0   # OPIVV
+    funct6: 0x38  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: int8, groups: 4 }
+    vs1: { type: vector, element: int8, groups: 4 }
+    vd:  { type: vector, element: int32 }
+  semantics:
+    operation: dot_product
+    accumulate: true
+    saturation: none
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: vqdotu.vv
+  description: "4-element unsigned dot product (UINT8×UINT8→UINT32)"
+  encoding:
+    format: vector
+    opcode: 0x2b  # custom-1
+    funct3: 0x0
+    funct6: 0x3a  # bits[31:26], vm bit[25] is separate (was 0x38, changed to fix collision with vqdot.vv)
+  operands:
+    vs2: { type: vector, element: uint8, groups: 4 }
+    vs1: { type: vector, element: uint8, groups: 4 }
+    vd:  { type: vector, element: uint32 }
+  semantics:
+    operation: dot_product
+    accumulate: true
+    saturation: none
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: vqdotsu.vv
+  description: "4-element signed×unsigned dot product (INT8×UINT8→INT32)"
+  encoding:
+    format: vector
+    opcode: 0x2b  # custom-1
+    funct3: 0x0
+    funct6: 0x39  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: int8, groups: 4 }
+    vs1: { type: vector, element: uint8, groups: 4 }
+    vd:  { type: vector, element: int32 }
+  semantics:
+    operation: dot_product
+    accumulate: true
+    saturation: none
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: vqdotus.vv
+  description: "4-element unsigned×signed dot product (UINT8×INT8→INT32)"
+  encoding:
+    format: vector
+    opcode: 0x2b  # custom-1
+    funct3: 0x0
+    funct6: 0x3b  # bits[31:26], vm bit[25] is separate (was 0x39, changed to fix collision with vqdotsu.vv)
+  operands:
+    vs2: { type: vector, element: uint8, groups: 4 }
+    vs1: { type: vector, element: int8, groups: 4 }
+    vd:  { type: vector, element: int32 }
+  semantics:
+    operation: dot_product
+    accumulate: true
+    saturation: none
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true

@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../src/rvxv/schema/instruction_spec.schema.json
+#
+# Example: INT32 vector reduction sum
+# Computes the sum of all INT32 vector elements into a single scalar result.
+# Useful for accumulation steps in integer-quantized neural network layers.
+#
+# Usage: rvxv generate --spec int32_reduction_sum.yaml --output ./build/
+
+name: vredsum_i32
+description: "INT32 vector reduction sum"
+encoding:
+  format: vector
+  opcode: 0x5b
+  funct3: 0x2
+  funct6: 0x00  # bits[31:26], vm bit[25] is separate
+operands:
+  vs2: { type: vector, element: int32 }
+  vs1: { type: vector, element: int32 }
+  vd:  { type: vector, element: int32 }
+semantics:
+  operation: reduction_sum
+  accumulate: false
+  saturation: none
+constraints:
+  vl_dependent: true
+  mask_agnostic: true
+  tail_agnostic: true

@@ -1,0 +1,62 @@
+# AME — Attached Matrix Extension
+# Tiled matrix operations with dedicated accumulator registers
+
+- name: ame_mma_i8
+  description: "AME tiled matrix multiply-accumulate INT8×INT8→INT32"
+  encoding:
+    format: vector
+    opcode: 0x0b  # custom-0
+    funct3: 0x0
+    funct6: 0x28  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: int8, groups: 4 }
+    vs1: { type: vector, element: int8, groups: 4 }
+    vd:  { type: vector, element: int32 }
+  semantics:
+    operation: mac
+    accumulate: true
+    saturation: none
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: ame_mma_bf16
+  description: "AME tiled matrix multiply-accumulate BF16×BF16→FP32"
+  encoding:
+    format: vector
+    opcode: 0x0b
+    funct3: 0x1
+    funct6: 0x28  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: bf16 }
+    vs1: { type: vector, element: bf16 }
+    vd:  { type: vector, element: fp32 }
+  semantics:
+    operation: fma
+    accumulate: true
+    rounding: rne
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: ame_mma_fp8
+  description: "AME tiled matrix multiply-accumulate FP8×FP8→FP32"
+  encoding:
+    format: vector
+    opcode: 0x0b
+    funct3: 0x2
+    funct6: 0x29  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: fp8_e4m3, groups: 4 }
+    vs1: { type: vector, element: fp8_e4m3, groups: 4 }
+    vd:  { type: vector, element: fp32 }
+  semantics:
+    operation: dot_product
+    accumulate: true
+    rounding: rne
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true

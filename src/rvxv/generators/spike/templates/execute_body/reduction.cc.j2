@@ -1,0 +1,103 @@
+{# ---------------------------------------------------------------------------
+   REDUCTION_SUM / REDUCTION_MAX execute body
+
+   Reductions iterate manually and write to element 0 of the destination
+   register.  Uses real Spike vector API with proper vstart/vl/mask handling.
+--------------------------------------------------------------------------- #}
+{
+  const reg_t vl = P.VU.vl->read();
+  const reg_t vstart_val = P.VU.vstart->read();
+  const bool masked = insn.v_vm() == 0;
+  const reg_t rd_num = insn.rd();
+  const reg_t rs2_num = insn.rs2();
+  const reg_t rs1_num = insn.rs1();
+
+{% if op == SemanticOp.REDUCTION_SUM %}
+  // Reduction sum over {{ sources[0].name }} with initial value from {{ sources[1].name if sources | length > 1 else sources[0].name }}[0]
+{% if sources[0].needs_conv %}
+  // AI-type reduction sum (work in float)
+  float acc = {{ sources[0].to_f32 }}(P.VU.elt<{{ sources[0].c_type }}>({% if sources | length > 1 %}rs1_num{% else %}rs2_num{% endif %}, 0));
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+    float elem = {{ sources[0].to_f32 }}(P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i));
+    acc += elem;
+  }
+  P.VU.elt<{{ dest.c_type }}>(rd_num, 0, true) = {{ dest.from_f32 }}(acc);
+{% elif sources[0].is_float %}
+  // Standard float reduction sum
+  {{ dest.c_type }} acc = P.VU.elt<{{ dest.c_type }}>({% if sources | length > 1 %}rs1_num{% else %}rs2_num{% endif %}, 0);
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+    {{ sources[0].c_type }} elem = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    acc += ({{ dest.c_type }})elem;
+  }
+  P.VU.elt<{{ dest.c_type }}>(rd_num, 0, true) = acc;
+{% else %}
+  // Integer reduction sum
+{% if saturation != "none" %}
+  int64_t acc = (int64_t)P.VU.elt<{{ dest.c_type }}>({% if sources | length > 1 %}rs1_num{% else %}rs2_num{% endif %}, 0);
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+    {{ sources[0].c_type }} elem = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    acc += (int64_t)elem;
+  }
+{% if saturation == "signed" %}
+  if (acc > INT{{ dest.width_bits }}_MAX) acc = INT{{ dest.width_bits }}_MAX;
+  if (acc < INT{{ dest.width_bits }}_MIN) acc = INT{{ dest.width_bits }}_MIN;
+{% else %}
+  if (acc > (int64_t)UINT{{ dest.width_bits }}_MAX) acc = (int64_t)UINT{{ dest.width_bits }}_MAX;
+  if (acc < 0) acc = 0;
+{% endif %}
+  P.VU.elt<{{ dest.c_type }}>(rd_num, 0, true) = ({{ dest.c_type }})acc;
+{% else %}
+  {{ dest.c_type }} acc = P.VU.elt<{{ dest.c_type }}>({% if sources | length > 1 %}rs1_num{% else %}rs2_num{% endif %}, 0);
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+    {{ sources[0].c_type }} elem = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    acc += ({{ dest.c_type }})elem;
+  }
+  P.VU.elt<{{ dest.c_type }}>(rd_num, 0, true) = acc;
+{% endif %}
+{% endif %}
+{% else %}
+  // Reduction max over {{ sources[0].name }} with initial value from {{ sources[1].name if sources | length > 1 else sources[0].name }}[0]
+{% if sources[0].needs_conv %}
+  // AI-type reduction max (work in float)
+  float acc = {{ sources[0].to_f32 }}(P.VU.elt<{{ sources[0].c_type }}>({% if sources | length > 1 %}rs1_num{% else %}rs2_num{% endif %}, 0));
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+    float elem = {{ sources[0].to_f32 }}(P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i));
+    if (elem > acc) acc = elem;
+  }
+  P.VU.elt<{{ dest.c_type }}>(rd_num, 0, true) = {{ dest.from_f32 }}(acc);
+{% elif sources[0].is_float %}
+  // Standard float reduction max
+  {{ dest.c_type }} acc = P.VU.elt<{{ dest.c_type }}>({% if sources | length > 1 %}rs1_num{% else %}rs2_num{% endif %}, 0);
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+    {{ sources[0].c_type }} elem = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    {{ dest.c_type }} val = ({{ dest.c_type }})elem;
+    if (val > acc) acc = val;
+  }
+  P.VU.elt<{{ dest.c_type }}>(rd_num, 0, true) = acc;
+{% else %}
+  // Integer reduction max
+  {{ dest.c_type }} acc = P.VU.elt<{{ dest.c_type }}>({% if sources | length > 1 %}rs1_num{% else %}rs2_num{% endif %}, 0);
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+    {{ sources[0].c_type }} elem = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    {{ dest.c_type }} val = ({{ dest.c_type }})elem;
+    if (val > acc) acc = val;
+  }
+  P.VU.elt<{{ dest.c_type }}>(rd_num, 0, true) = acc;
+{% endif %}
+{% endif %}
+  P.VU.vstart->write(0);
+}

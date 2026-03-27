@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Linting
+.ruff_cache/
+.mypy_cache/
+
+# Generated output (user-specific)
+/output/
+
+# Spike build artifacts (extern/spike is a submodule, but config.h is generated)
+extern/spike/config.h
+
+# Internal planning docs (not for public release)
+RVXV_Strategic_Plan.md
+
+# Editor/tool settings
+.claude/

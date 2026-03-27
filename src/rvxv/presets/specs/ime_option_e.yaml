@@ -1,0 +1,82 @@
+# Custom outer product instructions (inspired by RISC-V matrix extension proposals)
+# Uses custom-3 opcode space (0x7b)
+
+- name: vop_mm_i8
+  description: "Matrix outer product INT8×INT8→INT32"
+  encoding:
+    format: vector
+    opcode: 0x7b  # custom-3
+    funct3: 0x2   # OPMVV
+    funct6: 0x30  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: int8 }
+    vs1: { type: vector, element: int8 }
+    vd:  { type: vector, element: int32 }
+  semantics:
+    operation: outer_product
+    accumulate: false
+    saturation: none
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: vopacc_mm_i8
+  description: "Matrix outer product with accumulate INT8×INT8→INT32"
+  encoding:
+    format: vector
+    opcode: 0x7b  # custom-3
+    funct3: 0x2
+    funct6: 0x32  # bits[31:26], vm bit[25] is separate (was 0x30, changed to fix collision with vop_mm_i8)
+  operands:
+    vs2: { type: vector, element: int8 }
+    vs1: { type: vector, element: int8 }
+    vd:  { type: vector, element: int32 }
+  semantics:
+    operation: outer_product
+    accumulate: true
+    saturation: none
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: vop_mm_u8
+  description: "Matrix outer product UINT8×UINT8→UINT32"
+  encoding:
+    format: vector
+    opcode: 0x7b  # custom-3
+    funct3: 0x2
+    funct6: 0x31  # bits[31:26], vm bit[25] is separate
+  operands:
+    vs2: { type: vector, element: uint8 }
+    vs1: { type: vector, element: uint8 }
+    vd:  { type: vector, element: uint32 }
+  semantics:
+    operation: outer_product
+    accumulate: false
+    saturation: none
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true
+
+- name: vop_mm_bf16
+  description: "Matrix outer product BF16×BF16→FP32"
+  encoding:
+    format: vector
+    opcode: 0x7b  # custom-3
+    funct3: 0x2
+    funct6: 0x33  # bits[31:26], vm bit[25] is separate (was 0x31, changed to fix collision with vop_mm_u8)
+  operands:
+    vs2: { type: vector, element: bf16 }
+    vs1: { type: vector, element: bf16 }
+    vd:  { type: vector, element: fp32 }
+  semantics:
+    operation: outer_product
+    accumulate: false
+    rounding: rne
+  constraints:
+    vl_dependent: true
+    mask_agnostic: true
+    tail_agnostic: true

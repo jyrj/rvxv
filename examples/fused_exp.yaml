@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=../src/rvxv/schema/instruction_spec.schema.json
+#
+# Example: Fused exponential for softmax computation
+# Computes exp(x) element-wise on BF16 vectors — a critical
+# operation for attention layers in transformer models.
+#
+# Usage: rvxv generate --spec fused_exp.yaml --output ./build/
+
+name: vfexp_bf16
+description: "Fused exponential (for softmax) on BF16 elements"
+encoding:
+  format: vector
+  opcode: 0x5b
+  funct3: 0x3
+  funct6: 0x21  # bits[31:26], vm bit[25] is separate
+operands:
+  vs2: { type: vector, element: bf16 }
+  vd:  { type: vector, element: bf16 }
+semantics:
+  operation: fused_exp
+  accumulate: false
+  rounding: rne
+constraints:
+  vl_dependent: true
+  mask_agnostic: true
+  tail_agnostic: true

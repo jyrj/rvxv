@@ -1,0 +1,585 @@
+#!/usr/bin/env python3
+"""Auto-generated RVFI trace checker by RVXV.
+
+Parses an RVFI trace file (CSV format) from RTL simulation and validates
+retired custom instructions against expected behavior.
+
+Supports two comparison modes:
+  1. Reference trace comparison (--reference)
+  2. Golden model comparison via SemanticsEngine (--spec)
+
+Usage:
+    python {{ output_filename }} <rvfi_trace.csv> [--reference <ref_trace.csv>]
+    python {{ output_filename }} <rvfi_trace.csv> --spec <spec.yaml>
+    python {{ output_filename }} <rvfi_trace.csv> --tolerance-ulp 1
+    python {{ output_filename }} <rvfi_trace.csv> --tolerance-abs 1e-6
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import struct
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Instruction definitions (auto-generated from spec)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class InsnDef:
+    """Definition of a custom instruction for trace checking."""
+    name: str
+    match_val: int
+    mask_val: int
+    is_float_result: bool
+    dest_width_bits: int
+    is_signed: bool
+    has_accumulate: bool
+    saturation: str  # "none", "signed", "unsigned"
+
+INSN_DEFS: list[InsnDef] = [
+{% for insn in instructions %}
+    InsnDef(
+        name="{{ insn.name }}",
+        match_val=0x{{ '%08X' % insn.match_value }},
+        mask_val=0x{{ '%08X' % insn.mask_value }},
+        is_float_result={{ insn.is_float_result }},
+        dest_width_bits={{ insn.dest_width_bits }},
+        is_signed={{ insn.is_signed }},
+        has_accumulate={{ insn.has_accumulate }},
+        saturation="{{ insn.saturation }}",
+    ),
+{% endfor %}
+]
+
+
+# ---------------------------------------------------------------------------
+# Comparison helpers
+# ---------------------------------------------------------------------------
+
+def _parse_int(s: str) -> int:
+    """Parse an integer from decimal or hex string."""
+    s = s.strip()
+    if s.startswith(("0x", "0X")):
+        return int(s, 16)
+    return int(s)
+
+
+def _bits_to_float32(bits: int) -> float:
+    """Reinterpret a 32-bit integer as IEEE 754 float."""
+    return struct.unpack("f", struct.pack("I", bits & 0xFFFFFFFF))[0]
+
+
+def _bits_to_float64(bits: int) -> float:
+    """Reinterpret a 64-bit integer as IEEE 754 double."""
+    return struct.unpack("d", struct.pack("Q", bits & 0xFFFFFFFFFFFFFFFF))[0]
+
+
+def _ulp_distance_f32(a_bits: int, b_bits: int) -> int:
+    """Compute ULP distance between two float32 values (by raw bit pattern).
+
+    Maps IEEE 754 sign-magnitude to a linear integer space so that adjacent
+    floats have adjacent integers, then returns the absolute difference.
+    """
+    a = a_bits & 0xFFFFFFFF
+    b = b_bits & 0xFFFFFFFF
+    # Convert sign-magnitude to two's complement for comparison.
+    # For negative floats (sign bit set), map to negative integer space:
+    #   0x80000000 (-0.0) -> 0, 0x80000001 -> -1, 0xBF800000 (-1.0) -> large negative
+    if a >> 31:
+        a = 0x80000000 - a
+    if b >> 31:
+        b = 0x80000000 - b
+    return abs(a - b)
+
+
+def _ulp_distance_f64(a_bits: int, b_bits: int) -> int:
+    """Compute ULP distance between two float64 values (by raw bit pattern)."""
+    a = a_bits & 0xFFFFFFFFFFFFFFFF
+    b = b_bits & 0xFFFFFFFFFFFFFFFF
+    if a >> 63:
+        a = 0x8000000000000000 - a
+    if b >> 63:
+        b = 0x8000000000000000 - b
+    return abs(a - b)
+
+
+def _sign_extend(value: int, bits: int) -> int:
+    """Sign-extend a value from the given bit width."""
+    sign_bit = 1 << (bits - 1)
+    return (value & (sign_bit - 1)) - (value & sign_bit)
+
+
+def values_match(
+    actual: int,
+    expected: int,
+    insn: InsnDef,
+    tolerance_ulp: int = 0,
+    tolerance_abs: float = 0.0,
+) -> tuple[bool, str]:
+    """Compare actual vs expected, returning (match, detail_string)."""
+    if actual == expected:
+        return True, "exact match"
+
+    if insn.is_float_result and (tolerance_ulp > 0 or tolerance_abs > 0.0):
+        if insn.dest_width_bits <= 32:
+            act_f = _bits_to_float32(actual)
+            exp_f = _bits_to_float32(expected)
+            ulp_dist = _ulp_distance_f32(actual, expected)
+        else:
+            act_f = _bits_to_float64(actual)
+            exp_f = _bits_to_float64(expected)
+            ulp_dist = _ulp_distance_f64(actual, expected)
+
+        if tolerance_ulp > 0 and ulp_dist <= tolerance_ulp:
+            return True, f"within {ulp_dist} ULP (tolerance={tolerance_ulp})"
+
+        if tolerance_abs > 0.0 and abs(act_f - exp_f) <= tolerance_abs:
+            return True, f"within abs={abs(act_f - exp_f):.2e} (tolerance={tolerance_abs:.2e})"
+
+        return False, (
+            f"MISMATCH float: actual={act_f} (0x{actual:08X}) "
+            f"vs expected={exp_f} (0x{expected:08X}), "
+            f"ULP distance={ulp_dist}"
+        )
+
+    # Integer comparison
+    if insn.is_signed:
+        act_s = _sign_extend(actual, insn.dest_width_bits)
+        exp_s = _sign_extend(expected, insn.dest_width_bits)
+        return False, (
+            f"MISMATCH int: actual={act_s} (0x{actual:08X}) "
+            f"vs expected={exp_s} (0x{expected:08X})"
+        )
+
+    return False, (
+        f"MISMATCH uint: actual={actual} (0x{actual:08X}) "
+        f"vs expected={expected} (0x{expected:08X})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Saturation check
+# ---------------------------------------------------------------------------
+
+def check_saturation(value: int, insn: InsnDef) -> tuple[bool, str]:
+    """Check if a result value is within saturation bounds.
+
+    For saturating instructions, verify that the register value is a valid
+    sign- or zero-extended N-bit result.  This catches DUTs that wrap on
+    overflow instead of clamping to the saturation limit.
+    """
+    if insn.saturation == "none":
+        return True, ""
+
+    mask = (1 << insn.dest_width_bits) - 1
+
+    if insn.saturation == "unsigned":
+        # Unsigned N-bit result: no bits above dest_width should be set
+        if value & ~mask:
+            return False, (
+                f"SATURATION VIOLATION (unsigned): value=0x{value:X} "
+                f"exceeds {insn.dest_width_bits}-bit unsigned range [0, 0x{mask:X}]"
+            )
+        return True, ""
+
+    if insn.saturation == "signed":
+        # Signed N-bit result: upper bits must be proper sign extension.
+        # Extract the sign bit of the N-bit result and check that all
+        # upper bits match (all 1s if negative, all 0s if positive).
+        lo_bits = value & mask
+        sign_bit = (lo_bits >> (insn.dest_width_bits - 1)) & 1
+        upper_bits = value >> insn.dest_width_bits
+        if sign_bit:
+            # Negative result: all upper bits should be 1
+            expected_upper = (1 << (64 - insn.dest_width_bits)) - 1
+        else:
+            expected_upper = 0
+        if (upper_bits & ((1 << (64 - insn.dest_width_bits)) - 1)) != expected_upper:
+            signed_val = _sign_extend(lo_bits, insn.dest_width_bits)
+            lo = -(1 << (insn.dest_width_bits - 1))
+            hi = (1 << (insn.dest_width_bits - 1)) - 1
+            return False, (
+                f"SATURATION VIOLATION (signed): value=0x{value:X} "
+                f"not a valid sign-extended {insn.dest_width_bits}-bit result "
+                f"(expected [{lo}, {hi}])"
+            )
+        return True, ""
+
+    return True, ""
+
+
+# ---------------------------------------------------------------------------
+# Trace reader
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TraceEntry:
+    """One row from the RVFI trace."""
+    cycle: int
+    valid: bool
+    insn: int
+    trap: bool
+    rs1_addr: int
+    rs1_rdata: int
+    rs2_addr: int
+    rs2_rdata: int
+    rd_addr: int
+    rd_wdata: int
+    pc: int
+    mem_addr: int
+    mem_rdata: int
+    mem_wdata: int
+
+
+def _parse_trace_csv(path: Path) -> list[TraceEntry]:
+    """Parse an RVFI trace CSV file.
+
+    Expected columns (order may vary):
+        cycle, valid, insn, trap,
+        rs1_addr, rs1_rdata, rs2_addr, rs2_rdata,
+        rd_addr, rd_wdata,
+        pc, mem_addr, mem_rdata, mem_wdata
+    """
+    entries: list[TraceEntry] = []
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                entry = TraceEntry(
+                    cycle=_parse_int(row.get("cycle", "0")),
+                    valid=bool(_parse_int(row.get("valid", "0"))),
+                    insn=_parse_int(row.get("insn", "0")),
+                    trap=bool(_parse_int(row.get("trap", "0"))),
+                    rs1_addr=_parse_int(row.get("rs1_addr", "0")),
+                    rs1_rdata=_parse_int(row.get("rs1_rdata", "0")),
+                    rs2_addr=_parse_int(row.get("rs2_addr", "0")),
+                    rs2_rdata=_parse_int(row.get("rs2_rdata", "0")),
+                    rd_addr=_parse_int(row.get("rd_addr", "0")),
+                    rd_wdata=_parse_int(row.get("rd_wdata", "0")),
+                    pc=_parse_int(row.get("pc", "0")),
+                    mem_addr=_parse_int(row.get("mem_addr", "0")),
+                    mem_rdata=_parse_int(row.get("mem_rdata", "0")),
+                    mem_wdata=_parse_int(row.get("mem_wdata", "0")),
+                )
+                entries.append(entry)
+            except (ValueError, KeyError) as exc:
+                print(f"WARNING: Skipping malformed row: {exc}", file=sys.stderr)
+    return entries
+
+
+def _match_instruction(insn_word: int) -> InsnDef | None:
+    """Match an instruction word against known custom instructions."""
+    for idef in INSN_DEFS:
+        if (insn_word & idef.mask_val) == idef.match_val:
+            return idef
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Reference trace comparison
+# ---------------------------------------------------------------------------
+
+def _parse_reference_csv(path: Path) -> dict[int, int]:
+    """Parse reference trace: mapping from cycle -> expected rd_wdata.
+
+    The reference CSV must have at least 'cycle' and 'rd_wdata' columns.
+    """
+    ref: dict[int, int] = {}
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                cycle = _parse_int(row["cycle"])
+                rd_wdata = _parse_int(row["rd_wdata"])
+                ref[cycle] = rd_wdata
+            except (ValueError, KeyError):
+                continue
+    return ref
+
+
+# ---------------------------------------------------------------------------
+# Golden model comparison via SemanticsEngine
+# ---------------------------------------------------------------------------
+
+# Mapping from instruction name to source operand names (auto-generated)
+INSN_SOURCE_NAMES: dict[str, list[str]] = {
+{% for insn in instructions %}
+    "{{ insn.name }}": {{ insn.source_names }},
+{% endfor %}
+}
+
+
+def _load_golden_model(spec_path: Path):
+    """Load the YAML spec and return (specs, engine) for golden model comparison.
+
+    Returns None if rvxv is not installed.
+    """
+    try:
+        from rvxv.core.semantics_engine import SemanticsEngine
+        from rvxv.core.spec_parser import load_spec
+    except ImportError:
+        print(
+            "WARNING: rvxv package not installed. "
+            "Golden model comparison requires: pip install rvxv",
+            file=sys.stderr,
+        )
+        return None
+
+    specs = load_spec(spec_path)
+    engine = SemanticsEngine()
+    specs_by_name = {s.name: s for s in specs}
+    return specs_by_name, engine
+
+
+def _golden_model_check(
+    entry: "TraceEntry",
+    idef: InsnDef,
+    specs_by_name: dict,
+    engine,
+    tolerance_ulp: int = 0,
+    tolerance_abs: float = 0.0,
+) -> tuple[bool, str]:
+    """Compute expected result via SemanticsEngine and compare.
+
+    Returns (match, detail_string).
+    """
+    import numpy as np
+
+    spec = specs_by_name.get(idef.name)
+    if spec is None:
+        return True, "no spec for golden model"
+
+    source_names = INSN_SOURCE_NAMES.get(idef.name, [])
+    operands: dict[str, np.ndarray] = {}
+
+    # Map trace source register data to operand names
+    for i, src_name in enumerate(source_names):
+        if i == 0:
+            operands[src_name] = np.array([entry.rs1_rdata], dtype=np.int64)
+        elif i == 1:
+            operands[src_name] = np.array([entry.rs2_rdata], dtype=np.int64)
+
+    # If accumulate, provide destination as accumulator input
+    if idef.has_accumulate:
+        dest_name = list(spec.dest_operands.keys())[0]
+        operands[dest_name] = np.array([entry.rd_wdata], dtype=np.int64)
+
+    try:
+        expected_arr = engine.execute(spec, operands, vl=1)
+        expected = int(expected_arr[0])
+    except Exception as exc:
+        return True, f"golden model error: {exc}"
+
+    return values_match(
+        entry.rd_wdata, expected, idef,
+        tolerance_ulp=tolerance_ulp,
+        tolerance_abs=tolerance_abs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Main checker
+# ---------------------------------------------------------------------------
+
+def check_trace(
+    trace_path: Path,
+    reference_path: Path | None = None,
+    spec_path: Path | None = None,
+    tolerance_ulp: int = 0,
+    tolerance_abs: float = 0.0,
+    verbose: bool = False,
+) -> int:
+    """Check an RVFI trace against instruction definitions.
+
+    Supports two comparison modes:
+      - reference_path: compare against a pre-computed reference CSV
+      - spec_path: use SemanticsEngine golden model for on-the-fly comparison
+
+    Returns the number of mismatches found.
+    """
+    entries = _parse_trace_csv(trace_path)
+    reference = _parse_reference_csv(reference_path) if reference_path else {}
+
+    # Load golden model if spec provided
+    golden = None
+    specs_by_name = {}
+    engine = None
+    if spec_path:
+        golden = _load_golden_model(spec_path)
+        if golden is not None:
+            specs_by_name, engine = golden
+
+    total_checked = 0
+    mismatches = 0
+    traps = 0
+    saturation_violations = 0
+    golden_mismatches = 0
+
+    for entry in entries:
+        if not entry.valid:
+            continue
+
+        idef = _match_instruction(entry.insn)
+        if idef is None:
+            continue
+
+        total_checked += 1
+
+        if entry.trap:
+            traps += 1
+            if verbose:
+                print(
+                    f"  [TRAP] cycle={entry.cycle} insn={idef.name} "
+                    f"pc=0x{entry.pc:08X}"
+                )
+            continue
+
+        # Check saturation bounds
+        sat_ok, sat_detail = check_saturation(entry.rd_wdata, idef)
+        if not sat_ok:
+            saturation_violations += 1
+            print(
+                f"  [SAT]  cycle={entry.cycle} insn={idef.name} "
+                f"pc=0x{entry.pc:08X} {sat_detail}"
+            )
+
+        # Compare against reference if available
+        if reference_path and entry.cycle in reference:
+            expected = reference[entry.cycle]
+            match, detail = values_match(
+                entry.rd_wdata, expected, idef,
+                tolerance_ulp=tolerance_ulp,
+                tolerance_abs=tolerance_abs,
+            )
+            if not match:
+                mismatches += 1
+                print(
+                    f"  [FAIL] cycle={entry.cycle} insn={idef.name} "
+                    f"pc=0x{entry.pc:08X}"
+                )
+                print(f"         rs1_addr={entry.rs1_addr} rs1_rdata=0x{entry.rs1_rdata:016X}")
+                print(f"         rs2_addr={entry.rs2_addr} rs2_rdata=0x{entry.rs2_rdata:016X}")
+                print(f"         rd_addr={entry.rd_addr}  {detail}")
+            elif verbose:
+                print(
+                    f"  [PASS] cycle={entry.cycle} insn={idef.name} "
+                    f"pc=0x{entry.pc:08X} {detail}"
+                )
+
+        # Compare against golden model if spec provided
+        if golden is not None and engine is not None:
+            gm_match, gm_detail = _golden_model_check(
+                entry, idef, specs_by_name, engine,
+                tolerance_ulp=tolerance_ulp,
+                tolerance_abs=tolerance_abs,
+            )
+            if not gm_match:
+                golden_mismatches += 1
+                print(
+                    f"  [GOLDEN FAIL] cycle={entry.cycle} insn={idef.name} "
+                    f"pc=0x{entry.pc:08X}"
+                )
+                print(f"         rs1_addr={entry.rs1_addr} rs1_rdata=0x{entry.rs1_rdata:016X}")
+                print(f"         rs2_addr={entry.rs2_addr} rs2_rdata=0x{entry.rs2_rdata:016X}")
+                print(f"         rd_addr={entry.rd_addr}  {gm_detail}")
+            elif verbose:
+                print(
+                    f"  [GOLDEN PASS] cycle={entry.cycle} insn={idef.name} "
+                    f"pc=0x{entry.pc:08X} {gm_detail}"
+                )
+
+    # Summary
+    print()
+    print("=" * 72)
+    print("RVXV RVFI Trace Checker Summary")
+    print("=" * 72)
+    print(f"  Trace file : {trace_path}")
+    if reference_path:
+        print(f"  Reference  : {reference_path}")
+    if spec_path:
+        print(f"  Spec (golden model) : {spec_path}")
+    print(f"  Instructions checked : {total_checked}")
+    print(f"  Traps                : {traps}")
+    if reference_path:
+        print(f"  Ref mismatches       : {mismatches}")
+    if spec_path:
+        print(f"  Golden mismatches    : {golden_mismatches}")
+    print(f"  Saturation errors    : {saturation_violations}")
+    print(f"  Tolerance ULP        : {tolerance_ulp}")
+    print(f"  Tolerance ABS        : {tolerance_abs}")
+    print("=" * 72)
+
+    total_errors = mismatches + saturation_violations + golden_mismatches
+    if total_errors > 0:
+        print("RESULT: FAIL")
+    else:
+        print("RESULT: PASS")
+    print()
+
+    return total_errors
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="RVXV RVFI Trace Checker (auto-generated)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "trace", type=Path,
+        help="Path to RVFI trace CSV file from RTL simulation",
+    )
+    parser.add_argument(
+        "--reference", type=Path, default=None,
+        help="Path to reference trace CSV for comparison",
+    )
+    parser.add_argument(
+        "--spec", type=Path, default=None,
+        help="Path to original YAML spec for golden model comparison via SemanticsEngine",
+    )
+    parser.add_argument(
+        "--tolerance-ulp", type=int, default=0,
+        help="ULP tolerance for floating-point comparisons (default: 0 = exact)",
+    )
+    parser.add_argument(
+        "--tolerance-abs", type=float, default=0.0,
+        help="Absolute tolerance for floating-point comparisons (default: 0.0)",
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Print passing checks as well",
+    )
+    args = parser.parse_args()
+
+    if not args.trace.exists():
+        print(f"ERROR: Trace file not found: {args.trace}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.reference and not args.reference.exists():
+        print(f"ERROR: Reference file not found: {args.reference}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.spec and not args.spec.exists():
+        print(f"ERROR: Spec file not found: {args.spec}", file=sys.stderr)
+        sys.exit(1)
+
+    errors = check_trace(
+        trace_path=args.trace,
+        reference_path=args.reference,
+        spec_path=args.spec,
+        tolerance_ulp=args.tolerance_ulp,
+        tolerance_abs=args.tolerance_abs,
+        verbose=args.verbose,
+    )
+    sys.exit(1 if errors > 0 else 0)
+
+
+if __name__ == "__main__":
+    main()

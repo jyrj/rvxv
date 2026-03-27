@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rvxv"
+version = "0.1.0"
+description = "Generate verification infrastructure for custom RISC-V AI instructions from YAML specifications"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "Jayaraj J", email = "jayarajevur@gmail.com" }]
+keywords = ["risc-v", "verification", "ai", "fp8", "bfloat16", "spike", "rvfi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+    "Topic :: Software Development :: Testing",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "click>=8.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "jinja2>=3.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "hypothesis>=6.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+
+[project.scripts]
+rvxv = "rvxv.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/jyrj/rvxv"
+Documentation = "https://github.com/jyrj/rvxv#readme"
+Repository = "https://github.com/jyrj/rvxv"
+Issues = "https://github.com/jyrj/rvxv/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rvxv"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "numeric: numeric type tests",
+    "generator: code generation tests",
+    "slow: slow tests",
+    "e2e: end-to-end integration tests (Spike, Verilator)",
+]
+filterwarnings = [
+    "ignore::pytest.PytestCollectionWarning",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true

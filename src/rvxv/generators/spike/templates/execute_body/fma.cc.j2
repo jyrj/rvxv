@@ -1,0 +1,219 @@
+{# ---------------------------------------------------------------------------
+   FMA / MULTIPLY / ADD / MAC / FUSED_EXP execute body
+
+   Handles several related operations by conditionally emitting:
+     FMA:        acc = fma(a, b, acc)        or acc = a * b + acc
+     MULTIPLY:   result = a * b
+     ADD:        result = a + b
+     MAC:        acc += a * b                (multiply-accumulate)
+     FUSED_EXP:  result = exp(a * scale)     (fused exponential)
+
+   Uses real Spike vector API with proper vstart/vl/mask handling.
+--------------------------------------------------------------------------- #}
+{
+  const reg_t vl = P.VU.vl->read();
+  const reg_t vstart_val = P.VU.vstart->read();
+  const bool masked = insn.v_vm() == 0;
+  const reg_t rd_num = insn.rd();
+  const reg_t rs2_num = insn.rs2();
+  const reg_t rs1_num = insn.rs1();
+
+{% if is_fused_exp %}
+  // Fused exponential: exp({{ sources[0].name }} * scale)
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+{% if sources[0].needs_conv %}
+    float a = {{ sources[0].to_f32 }}(P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i));
+{% elif sources[0].is_float %}
+    float a = (float)P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+{% else %}
+    float a = (float)P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+{% endif %}
+{% if sources | length > 1 %}
+{% if sources[1].needs_conv %}
+    float scale = {{ sources[1].to_f32 }}(P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i));
+{% elif sources[1].is_float %}
+    float scale = (float)P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i);
+{% else %}
+    float scale = (float)P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i);
+{% endif %}
+{% else %}
+    float scale = 1.0f;
+{% endif %}
+    float result = std::exp(a * scale);
+{% if dest.needs_conv %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = {{ dest.from_f32 }}(result);
+{% elif dest.is_float %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = ({{ dest.c_type }})result;
+{% else %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = ({{ dest.c_type }})result;
+{% endif %}
+  }
+{% elif op == SemanticOp.ADD %}
+  // Element-wise add: {{ sources[0].name }} + {{ sources[1].name }}
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+{% if sources[0].needs_conv %}
+    float a = {{ sources[0].to_f32 }}(P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i));
+    float b = {{ sources[1].to_f32 }}(P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i));
+{% if accumulate %}
+    float acc = {{ dest.to_f32 }}(P.VU.elt<{{ dest.c_type }}>(rd_num, i));
+    float result = a + b + acc;
+{% else %}
+    float result = a + b;
+{% endif %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = {{ dest.from_f32 }}(result);
+{% else %}
+    {{ sources[0].c_type }} a = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    {{ sources[1].c_type }} b = P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i);
+{% if saturation != "none" %}
+{% if accumulate %}
+    int64_t result = (int64_t)a + (int64_t)b + (int64_t)P.VU.elt<{{ dest.c_type }}>(rd_num, i);
+{% else %}
+    int64_t result = (int64_t)a + (int64_t)b;
+{% endif %}
+{% if saturation == "signed" %}
+    if (result > INT{{ dest.width_bits }}_MAX) result = INT{{ dest.width_bits }}_MAX;
+    if (result < INT{{ dest.width_bits }}_MIN) result = INT{{ dest.width_bits }}_MIN;
+{% else %}
+    if (result > (int64_t)UINT{{ dest.width_bits }}_MAX) result = (int64_t)UINT{{ dest.width_bits }}_MAX;
+    if (result < 0) result = 0;
+{% endif %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = ({{ dest.c_type }})result;
+{% else %}
+{% if accumulate %}
+    {{ dest.c_type }} acc = P.VU.elt<{{ dest.c_type }}>(rd_num, i);
+    {{ dest.c_type }} result = ({{ dest.c_type }})a + ({{ dest.c_type }})b + acc;
+{% else %}
+    {{ dest.c_type }} result = ({{ dest.c_type }})a + ({{ dest.c_type }})b;
+{% endif %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = result;
+{% endif %}
+{% endif %}
+  }
+{% elif op == SemanticOp.MULTIPLY %}
+  // Element-wise multiply: {{ sources[0].name }} * {{ sources[1].name }}
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+{% if sources[0].needs_conv %}
+    float a = {{ sources[0].to_f32 }}(P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i));
+    float b = {{ sources[1].to_f32 }}(P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i));
+    float result = a * b;
+{% if dest.needs_conv %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = {{ dest.from_f32 }}(result);
+{% else %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = ({{ dest.c_type }})result;
+{% endif %}
+{% else %}
+    {{ sources[0].c_type }} a = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    {{ sources[1].c_type }} b = P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i);
+{% if saturation != "none" %}
+    int64_t result = (int64_t)a * (int64_t)b;
+{% if saturation == "signed" %}
+    if (result > INT{{ dest.width_bits }}_MAX) result = INT{{ dest.width_bits }}_MAX;
+    if (result < INT{{ dest.width_bits }}_MIN) result = INT{{ dest.width_bits }}_MIN;
+{% else %}
+    if (result > (int64_t)UINT{{ dest.width_bits }}_MAX) result = (int64_t)UINT{{ dest.width_bits }}_MAX;
+    if (result < 0) result = 0;
+{% endif %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = ({{ dest.c_type }})result;
+{% else %}
+    {{ dest.c_type }} result = ({{ dest.c_type }})a * ({{ dest.c_type }})b;
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = result;
+{% endif %}
+{% endif %}
+  }
+{% elif op == SemanticOp.MAC %}
+  // Multiply-accumulate: {{ dest.name }} += {{ sources[0].name }} * {{ sources[1].name }}
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+{% if sources[0].needs_conv %}
+    float a = {{ sources[0].to_f32 }}(P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i));
+    float b = {{ sources[1].to_f32 }}(P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i));
+    float acc = {{ dest.to_f32 }}(P.VU.elt<{{ dest.c_type }}>(rd_num, i));
+    acc += a * b;
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = {{ dest.from_f32 }}(acc);
+{% else %}
+    {{ sources[0].c_type }} a = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    {{ sources[1].c_type }} b = P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i);
+{% if saturation != "none" %}
+    int64_t acc = (int64_t)P.VU.elt<{{ dest.c_type }}>(rd_num, i);
+    acc += (int64_t)a * (int64_t)b;
+{% if saturation == "signed" %}
+    if (acc > INT{{ dest.width_bits }}_MAX) acc = INT{{ dest.width_bits }}_MAX;
+    if (acc < INT{{ dest.width_bits }}_MIN) acc = INT{{ dest.width_bits }}_MIN;
+{% else %}
+    if (acc > (int64_t)UINT{{ dest.width_bits }}_MAX) acc = (int64_t)UINT{{ dest.width_bits }}_MAX;
+    if (acc < 0) acc = 0;
+{% endif %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = ({{ dest.c_type }})acc;
+{% else %}
+    {{ dest.c_type }} acc = P.VU.elt<{{ dest.c_type }}>(rd_num, i);
+    acc += ({{ dest.c_type }})a * ({{ dest.c_type }})b;
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = acc;
+{% endif %}
+{% endif %}
+  }
+{% else %}
+  // Fused multiply-add: {{ sources[0].name }} * {{ sources[1].name }} + {{ dest.name }}
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+{% if sources[0].needs_conv %}
+    {{ sources[0].c_type }} a_raw = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    {{ sources[1].c_type }} b_raw = P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i);
+    float a = {{ sources[0].to_f32 }}(a_raw);
+    float b = {{ sources[1].to_f32 }}(b_raw);
+{% if accumulate %}
+    float acc = {{ dest.to_f32 }}(P.VU.elt<{{ dest.c_type }}>(rd_num, i));
+    acc = std::fma(a, b, acc);
+{% else %}
+    float acc = std::fma(a, b, 0.0f);
+{% endif %}
+{% if dest.needs_conv %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = {{ dest.from_f32 }}(acc);
+{% else %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = ({{ dest.c_type }})acc;
+{% endif %}
+{% else %}
+    {{ sources[0].c_type }} a = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    {{ sources[1].c_type }} b = P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i);
+{% if dest.is_float %}
+    {{ dest.c_type }} acc = P.VU.elt<{{ dest.c_type }}>(rd_num, i);
+    acc = std::fma(({{ dest.c_type }})a, ({{ dest.c_type }})b, acc);
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = acc;
+{% else %}
+{% if saturation != "none" %}
+{% if accumulate %}
+    int64_t acc = (int64_t)P.VU.elt<{{ dest.c_type }}>(rd_num, i);
+    acc += (int64_t)a * (int64_t)b;
+{% else %}
+    int64_t acc = (int64_t)a * (int64_t)b;
+{% endif %}
+{% if saturation == "signed" %}
+    if (acc > INT{{ dest.width_bits }}_MAX) acc = INT{{ dest.width_bits }}_MAX;
+    if (acc < INT{{ dest.width_bits }}_MIN) acc = INT{{ dest.width_bits }}_MIN;
+{% else %}
+    if (acc > (int64_t)UINT{{ dest.width_bits }}_MAX) acc = (int64_t)UINT{{ dest.width_bits }}_MAX;
+    if (acc < 0) acc = 0;
+{% endif %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = ({{ dest.c_type }})acc;
+{% else %}
+{% if accumulate %}
+    {{ dest.c_type }} acc = P.VU.elt<{{ dest.c_type }}>(rd_num, i);
+    acc += ({{ dest.c_type }})a * ({{ dest.c_type }})b;
+{% else %}
+    {{ dest.c_type }} acc = ({{ dest.c_type }})a * ({{ dest.c_type }})b;
+{% endif %}
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = acc;
+{% endif %}
+{% endif %}
+{% endif %}
+  }
+{% endif %}
+  P.VU.vstart->write(0);
+}

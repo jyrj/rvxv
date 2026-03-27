@@ -1,0 +1,38 @@
+{# ---------------------------------------------------------------------------
+   COMPARE execute body
+
+   Element-wise comparison writing a mask bit per element.
+   Result is 1 (true) or 0 (false) per element in the destination register.
+   Uses real Spike vector API with proper vstart/vl/mask handling.
+--------------------------------------------------------------------------- #}
+{
+  const reg_t vl = P.VU.vl->read();
+  const reg_t vstart_val = P.VU.vstart->read();
+  const bool masked = insn.v_vm() == 0;
+  const reg_t rd_num = insn.rd();
+  const reg_t rs2_num = insn.rs2();
+  const reg_t rs1_num = insn.rs1();
+
+  // Compare: {{ sources[0].name }} vs {{ sources[1].name }} -> mask in {{ dest.name }}
+  for (reg_t i = vstart_val; i < vl; ++i) {
+    if (masked && !(P.VU.elt<uint8_t>(0, i / 8) & (1 << (i % 8))))
+      continue;
+{% if sources[0].needs_conv %}
+    float a = {{ sources[0].to_f32 }}(P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i));
+    float b = {{ sources[1].to_f32 }}(P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i));
+    // Compare equal; for other predicates, extend the template
+    bool cmp = (a == b);
+{% elif sources[0].is_float %}
+    {{ sources[0].c_type }} a = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    {{ sources[1].c_type }} b = P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i);
+    bool cmp = (a == b);
+{% else %}
+    {{ sources[0].c_type }} a = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i);
+    {{ sources[1].c_type }} b = P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i);
+    bool cmp = (a == b);
+{% endif %}
+    // Write comparison result as 0/1 into destination element
+    P.VU.elt<{{ dest.c_type }}>(rd_num, i, true) = cmp ? 1 : 0;
+  }
+  P.VU.vstart->write(0);
+}
