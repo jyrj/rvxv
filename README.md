@@ -1,4 +1,4 @@
-# RVXV -- RISC-V AI Extension Verification Platform
+# RVXV -- RISC-V AI Extension Verification Generator
 
 RVXV generates verification infrastructure for custom RISC-V AI vector
 instructions from YAML specifications. Given one YAML file describing an
@@ -68,7 +68,12 @@ Be honest about what we haven't proven:
 ## Quick Start
 
 ```bash
+git clone --recurse-submodules https://github.com/jyrj/rvxv.git
+cd rvxv
 pip install -e .
+
+# If you already cloned without --recurse-submodules:
+# git submodule update --init --recursive
 
 # Generate from a YAML spec
 rvxv generate --spec examples/int8_dot_product.yaml --output ./build/
