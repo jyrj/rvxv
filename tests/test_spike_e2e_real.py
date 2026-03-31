@@ -18,7 +18,7 @@ import pytest
 
 from rvxv.core.spec_parser import load_spec
 from rvxv.generators.spike.spike_gen import SpikeGenerator
-from rvxv.generators.tests.test_gen import TestGenerator
+from rvxv.generators.tests.test_gen import AssemblyTestGenerator
 
 REPO_ROOT = Path(__file__).parent.parent
 SPIKE_SRC = REPO_ROOT / "extern" / "spike"
@@ -130,7 +130,7 @@ class TestSpikeRealE2E:
         spike_gen.generate(specs, gen_out)
 
         # Generate tests
-        test_gen = TestGenerator()
+        test_gen = AssemblyTestGenerator()
         test_out = tmp_path / "tests"
         test_gen.generate(specs, gen_out)
 
@@ -169,7 +169,7 @@ class TestSpikeRealE2E:
         gen_out = tmp_path / "gen"
         spike_gen.generate(specs, gen_out)
 
-        test_gen = TestGenerator()
+        test_gen = AssemblyTestGenerator()
         test_gen.generate(specs, gen_out)
 
         spike_out = gen_out / "spike"
@@ -199,9 +199,8 @@ class TestSpikeRealE2E:
             f"Expected at least 10 custom instruction executions, got {custom_insn_count}"
         )
 
-    @pytest.mark.xfail(reason="Reduction sum golden values have a bug (found by this E2E test)")
     def test_int32_reduction_sum_e2e(self, tmp_path):
-        """INT32 reduction sum: verify a different operation type works."""
+        """INT32 reduction sum: verify reduction operation works E2E."""
         result = self._generate_and_run("int32_reduction_sum.yaml", tmp_path)
         assert result.returncode == 0, (
             f"Spike test FAILED for reduction_sum (exit {result.returncode}).\n"

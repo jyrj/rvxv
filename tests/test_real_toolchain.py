@@ -19,7 +19,7 @@ import pytest
 
 from rvxv.core.spec_parser import load_spec
 from rvxv.generators.tests.asm_emitter import RISCVAssemblyEmitter
-from rvxv.generators.tests.test_gen import TestGenerator
+from rvxv.generators.tests.test_gen import AssemblyTestGenerator
 
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
 REPO_ROOT = Path(__file__).parent.parent
@@ -117,7 +117,7 @@ class TestDirectedAssembly:
     def test_int8_dot_directed_assembles(self, tmp_path):
         """Generated int8_dot_product directed test assembles with riscv-gcc."""
         specs = load_spec(EXAMPLES_DIR / "int8_dot_product.yaml")
-        gen = TestGenerator()
+        gen = AssemblyTestGenerator()
         files = gen.generate(specs, tmp_path)
 
         directed_files = [f for f in files if "directed" in str(f)]
@@ -136,7 +136,7 @@ class TestDirectedAssembly:
     def test_bf16_fma_directed_assembles(self, tmp_path):
         """Generated bf16_fma directed test assembles with riscv-gcc."""
         specs = load_spec(EXAMPLES_DIR / "bf16_fma.yaml")
-        gen = TestGenerator()
+        gen = AssemblyTestGenerator()
         files = gen.generate(specs, tmp_path)
 
         directed_files = [f for f in files if "directed" in str(f)]
@@ -155,7 +155,7 @@ class TestDirectedAssembly:
         for yaml_path in sorted(EXAMPLES_DIR.glob("*.yaml")):
             specs = load_spec(yaml_path)
             out = tmp_path / yaml_path.stem
-            gen = TestGenerator()
+            gen = AssemblyTestGenerator()
             files = gen.generate(specs, out)
 
             directed_files = [f for f in files if "directed" in str(f)]
@@ -241,7 +241,7 @@ class TestWordNotInsn:
         .word for maximum assembler compatibility.
         """
         specs = load_spec(EXAMPLES_DIR / "int8_dot_product.yaml")
-        gen = TestGenerator()
+        gen = AssemblyTestGenerator()
         files = gen.generate(specs, tmp_path)
 
         for s_file in files:
@@ -261,7 +261,7 @@ class TestWordNotInsn:
         for yaml_path in sorted(EXAMPLES_DIR.glob("*.yaml")):
             specs = load_spec(yaml_path)
             out = tmp_path / yaml_path.stem
-            gen = TestGenerator()
+            gen = AssemblyTestGenerator()
             files = gen.generate(specs, out)
 
             for s_file in files:
@@ -281,7 +281,7 @@ class TestRandomAssembly:
     def test_int8_dot_random_assembles(self, tmp_path):
         """Generated int8_dot_product random test assembles with riscv-gcc."""
         specs = load_spec(EXAMPLES_DIR / "int8_dot_product.yaml")
-        gen = TestGenerator(random_count=10)  # fewer iterations for speed
+        gen = AssemblyTestGenerator(random_count=10)  # fewer iterations for speed
         files = gen.generate(specs, tmp_path)
 
         random_files = [f for f in files if "random" in str(f)]
@@ -299,7 +299,7 @@ class TestRandomAssembly:
     def test_bf16_fma_random_assembles(self, tmp_path):
         """Generated bf16_fma random test assembles with riscv-gcc."""
         specs = load_spec(EXAMPLES_DIR / "bf16_fma.yaml")
-        gen = TestGenerator(random_count=10)
+        gen = AssemblyTestGenerator(random_count=10)
         files = gen.generate(specs, tmp_path)
 
         random_files = [f for f in files if "random" in str(f)]
@@ -319,7 +319,7 @@ class TestRandomAssembly:
         for yaml_path in sorted(EXAMPLES_DIR.glob("*.yaml")):
             specs = load_spec(yaml_path)
             out = tmp_path / yaml_path.stem
-            gen = TestGenerator(random_count=5)
+            gen = AssemblyTestGenerator(random_count=5)
             files = gen.generate(specs, out)
 
             random_files = [f for f in files if "random" in str(f)]

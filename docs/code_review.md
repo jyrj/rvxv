@@ -1,31 +1,25 @@
-# Code Review Notes
+# Verification Status
 
-Generated artifacts were reviewed for correctness.
+## End-to-End Spike Execution
 
-## Review Methodology
+All 7 example instruction specs pass end-to-end:
+YAML spec -> Spike C++ extension -> compiled into Spike -> assembly test compiled
+-> executed in Spike -> all golden value comparisons pass.
 
-Generated files from `rvxv generate --spec examples/int8_dot_product.yaml`
-were independently reviewed for correctness.
+Tested specs: INT8 dot product, FP8 E4M3 dot product, INT4 packed MAC,
+BF16 FMA, BF16-to-FP32 convert, fused exponential, INT32 reduction sum.
 
-## Key Findings (Fixed)
+## Numeric Library
 
-1. **vm bit encoding (Fixed)**: Vector instructions now use `format: vector` with
-   separate `funct6` field. The vm bit (bit 25) is correctly set: vm=1 for unmasked
-   operations, vm=0 for masked operations. MASK does not include bit 25.
+Exhaustively validated against Berkeley SoftFloat:
+- FP8 E4M3: 256/256 bit patterns match
+- FP8 E5M2: 256/256 bit patterns match
+- BFloat16: 65536/65536 bit patterns match
+- BFloat16 encode: 50000 random FP32 values across 5 rounding modes, 100% match
 
-2. **Loop bounds (Fixed)**: Dot product execute body now iterates `vl / group_size`
-   output elements instead of `vl` source elements, preventing out-of-bounds access.
+## Known Limitations
 
-3. **Assembly encoding (Fixed)**: Generated tests use `.word` directives instead of
-   `.insn r`, which does not support vector register operands in GCC.
-
-4. **Spike API (Fixed)**: Extension class uses `const` on `name()`, removed
-   unnecessary `rocc.h` include, uses `decode.h` instead of `decode_macros.h`.
-
-## Verified Correct
-
-- Golden expected values are mathematically correct
-- Vector vstart handling is implemented
-- Mask register (v0) checking is implemented
-- Test structure (load, execute, store, compare) is correct
-- MATCH/MASK encoding constants are correct for the custom opcode space
+- Masked reduction tests are skipped (masked reductions have different
+  semantics from element-wise masking and need separate golden value logic)
+- SVA assertions are structural templates, not tested in simulation
+- RVFI checker is a template requiring adaptation per trace format

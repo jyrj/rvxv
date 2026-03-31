@@ -28,8 +28,10 @@ htmlcov/
 # Generated output (user-specific)
 /output/
 
-# Spike build artifacts (extern/spike is a submodule, but config.h is generated)
-extern/spike/config.h
+# External dependencies (cloned separately, not committed to repo)
+# Users should run: git clone --depth=1 https://github.com/riscv/riscv-isa-sim.git extern/spike
+#                   git clone --depth=1 https://github.com/riscv/riscv-tests.git extern/riscv-tests
+extern/
 
 # Internal planning docs (not for public release)
 RVXV_Strategic_Plan.md

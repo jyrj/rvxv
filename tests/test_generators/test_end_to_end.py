@@ -39,12 +39,12 @@ class TestEndToEnd:
         from rvxv.generators.assertions.assertion_gen import AssertionGenerator
         from rvxv.generators.docs.spec_doc_gen import DocGenerator
         from rvxv.generators.spike.spike_gen import SpikeGenerator
-        from rvxv.generators.tests.test_gen import TestGenerator
+        from rvxv.generators.tests.test_gen import AssemblyTestGenerator
 
         specs = load_spec(Path("examples/int8_dot_product.yaml"))
 
         spike_files = SpikeGenerator().generate(specs, tmp_path)
-        test_files = TestGenerator().generate(specs, tmp_path)
+        test_files = AssemblyTestGenerator().generate(specs, tmp_path)
         assert_files = AssertionGenerator().generate(specs, tmp_path)
         doc_files = DocGenerator().generate(specs, tmp_path)
 

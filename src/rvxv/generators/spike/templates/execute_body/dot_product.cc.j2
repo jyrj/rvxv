@@ -100,6 +100,23 @@
       {{ sources[0].c_type }} a_raw = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i * {{ group_size }} + g);
       {{ sources[1].c_type }} b_raw = P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i * {{ group_size }} + g);
       acc += ({{ dest.c_type }})a_raw * ({{ dest.c_type }})b_raw;
+{% elif sources[0].is_subbyte %}
+      // Sub-byte element: {{ sources[0].width_bits }}-bit value in {{ sources[0].sew_bits }}-bit container.
+      // Sign-extend from {{ sources[0].width_bits }} bits.
+      {
+        const int W = {{ sources[0].width_bits }};
+        const uint8_t lo_mask = (1u << W) - 1;
+        uint8_t raw_a = P.VU.elt<uint8_t>(rs2_num, i * {{ group_size }} + g) & lo_mask;
+        uint8_t raw_b = P.VU.elt<uint8_t>(rs1_num, i * {{ group_size }} + g) & lo_mask;
+        const int32_t sign_bit = 1 << (W - 1);
+        int32_t a = (int32_t)(raw_a ^ sign_bit) - sign_bit;
+        int32_t b = (int32_t)(raw_b ^ sign_bit) - sign_bit;
+{% if saturation != "none" %}
+        acc += (int64_t)a * (int64_t)b;
+{% else %}
+        acc += ({{ dest.c_type }})a * ({{ dest.c_type }})b;
+{% endif %}
+      }
 {% else %}
       {{ sources[0].c_type }} a = P.VU.elt<{{ sources[0].c_type }}>(rs2_num, i * {{ group_size }} + g);
       {{ sources[1].c_type }} b = P.VU.elt<{{ sources[1].c_type }}>(rs1_num, i * {{ group_size }} + g);

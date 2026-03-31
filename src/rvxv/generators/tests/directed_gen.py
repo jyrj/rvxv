@@ -24,9 +24,19 @@ from pathlib import Path
 import numpy as np
 
 from rvxv.core.instruction_ir import InstructionSpec
-from rvxv.core.type_system import ElementType, get_type_info
+from rvxv.core.type_system import ElementType, SemanticOp, get_type_info
 from rvxv.generators.tests.asm_emitter import RISCVAssemblyEmitter
 from rvxv.generators.tests.corner_cases import CornerCase, get_corner_cases
+
+# Default VLEN in bits.  Spike defaults to 128.  Tests must not request more
+# elements than VLMAX = VLEN / SEW * LMUL for a given configuration.
+_DEFAULT_VLEN = 128
+
+
+def _clamp_vl(num_elements: int, sew: int, lmul: int = 1) -> int:
+    """Clamp element count to VLMAX for given SEW and LMUL."""
+    vlmax = (_DEFAULT_VLEN // sew) * lmul
+    return min(num_elements, vlmax)
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +125,7 @@ def _compute_golden_value(
     operand_b: list[int],
     engine=None,
     acc_init: int | None = None,
+    vl: int | None = None,
 ) -> list[int]:
     """Compute expected result using SemanticsEngine.
 
@@ -126,16 +137,23 @@ def _compute_golden_value(
     acc_init : int | None
         Initial accumulator value for accumulating instructions.
         Defaults to 0 if *None*.
+    vl : int | None
+        Vector length to use.  If given, operands are truncated to *vl*
+        elements before computing the golden value, matching what hardware
+        does when vsetvli clamps the requested vl to VLMAX.
     """
     if engine is None:
         engine = _get_semantics_engine()
 
+    a = operand_a[:vl] if vl is not None else operand_a
+    b = operand_b[:vl] if vl is not None and operand_b else operand_b
+
     sources = sorted(spec.source_operands.keys())
     operands: dict[str, np.ndarray] = {}
 
-    operands[sources[0]] = np.array(operand_a, dtype=np.int64)
-    if len(sources) >= 2 and operand_b:
-        operands[sources[1]] = np.array(operand_b, dtype=np.int64)
+    operands[sources[0]] = np.array(a, dtype=np.int64)
+    if len(sources) >= 2 and b:
+        operands[sources[1]] = np.array(b, dtype=np.int64)
 
     # If accumulate, provide initialised accumulator
     if spec.semantics.accumulate:
@@ -144,7 +162,7 @@ def _compute_golden_value(
         src_ops = list(spec.source_operands.values())
         if src_ops:
             group_size = src_ops[0].groups
-        n_out = max(1, len(operand_a) // group_size)
+        n_out = max(1, len(a) // group_size)
         init_val = acc_init if acc_init is not None else 0
         operands[dest_key] = np.full(n_out, init_val, dtype=np.int64)
 
@@ -234,11 +252,27 @@ class DirectedTestGenerator:
         src_eew = _eew_for_type(src_type)
         dst_eew = _eew_for_type(dst_type)
 
+        # Determine the SEW used in vsetvli.  Must match the require() in the
+        # Spike execute body (see execute_gen.py).  For widening DOT_PRODUCT/
+        # MAC/OUTER_PRODUCT, Spike uses source SEW.  For all other ops
+        # (including widening FMA, CONVERT), Spike uses destination SEW.
+        op = spec.semantics.operation
+        is_widening = src_sew < dst_sew
+        if is_widening and op in (
+            SemanticOp.DOT_PRODUCT, SemanticOp.MAC, SemanticOp.OUTER_PRODUCT,
+        ):
+            vsetvli_sew = src_sew
+        else:
+            vsetvli_sew = dst_sew if is_widening else src_sew
+
         # --- Compute golden values for ALL corner cases ---
+        # Clamp element count to VLMAX so golden values match what Spike computes
+        vlmax = _DEFAULT_VLEN // vsetvli_sew
         golden_values: list[list[int]] = []
         for idx, cc in enumerate(corner_cases):
             try:
-                gv = _compute_golden_value(spec, cc.operand_a, cc.operand_b, engine)
+                cc_vl = min(len(cc.operand_a), vlmax)
+                gv = _compute_golden_value(spec, cc.operand_a, cc.operand_b, engine, vl=cc_vl)
                 golden_values.append(gv)
             except Exception:
                 logger.warning(
@@ -270,7 +304,9 @@ class DirectedTestGenerator:
                 )
 
         # --- Add data for mask test ---
-        if corner_cases and spec.encoding.vm:
+        # Skip mask data for reductions (masked reductions have different semantics)
+        is_reduction = op in (SemanticOp.REDUCTION_SUM, SemanticOp.REDUCTION_MAX)
+        if corner_cases and spec.encoding.vm and not is_reduction:
             self._add_mask_test_data(asm, spec, corner_cases[0], engine, dst_sew, dst_eew)
 
         # --- Add data for LMUL sweep ---
@@ -293,12 +329,14 @@ class DirectedTestGenerator:
             asm.begin_test_case(test_id, cc.description)
             asm.reset_temp_gprs()
 
-            num_elements = len(cc.operand_a)
+            # Clamp to VLMAX so vsetvli grants the requested vl
+            vlmax = _DEFAULT_VLEN // vsetvli_sew
+            num_elements = min(len(cc.operand_a), vlmax)
 
             # Configure vector unit
-            asm.emit_comment(f"Configure: SEW={src_sew}, VL={num_elements}")
+            asm.emit_comment(f"Configure: SEW={vsetvli_sew}, VL={num_elements}")
             asm.emit_li("a0", num_elements)
-            asm.emit_vsetvli("a0", "a0", src_sew, lmul=1, ta=True, ma=True)
+            asm.emit_vsetvli("a0", "a0", vsetvli_sew, lmul=1, ta=True, ma=True)
 
             # Load operand A
             asm.emit_load_address("a1", f"tc{idx}_a")
@@ -364,28 +402,28 @@ class DirectedTestGenerator:
         # --- VL boundary tests ---
         test_id = self._emit_vl_boundary_tests(
             asm, spec, corner_cases, vs_regs, vd,
-            src_type, dst_type, src_sew, dst_sew,
+            src_type, dst_type, vsetvli_sew, dst_sew,
             src_eew, dst_eew, test_id, engine,
         )
 
         # --- Masked operation test ---
         test_id = self._emit_masked_test(
             asm, spec, corner_cases, vs_regs, vd,
-            src_type, dst_type, src_sew, dst_sew,
+            src_type, dst_type, vsetvli_sew, dst_sew,
             src_eew, dst_eew, test_id, engine,
         )
 
         # --- LMUL sweep tests ---
         test_id = self._emit_lmul_sweep_tests(
             asm, spec, corner_cases, vs_regs, vd,
-            src_type, dst_type, src_sew, dst_sew,
+            src_type, dst_type, vsetvli_sew, dst_sew,
             src_eew, dst_eew, test_id, engine,
         )
 
         # --- vstart != 0 test ---
         test_id = self._emit_vstart_test(
             asm, spec, corner_cases, vs_regs, vd,
-            src_type, dst_type, src_sew, dst_sew,
+            src_type, dst_type, vsetvli_sew, dst_sew,
             src_eew, dst_eew, test_id, engine,
         )
 
@@ -502,10 +540,13 @@ class DirectedTestGenerator:
         # For accumulating instructions, the mask test pre-initialises vd
         # with 0xDEADBEEF, so golden values must use that as the accumulator
         # instead of zero.
+        src_type = get_type_info(list(spec.source_operands.values())[0].element)
+        mask_vl = _clamp_vl(len(cc.operand_a), src_type.sew_bits)
         try:
             golden = _compute_golden_value(
                 spec, cc.operand_a, cc.operand_b, engine,
                 acc_init=0xDEADBEEF if spec.semantics.accumulate else None,
+                vl=mask_vl,
             )
         except Exception:
             logger.warning(
@@ -527,6 +568,7 @@ class DirectedTestGenerator:
         if golden:
             expected_words: list[int] = []
             bytes_per_elem = dst_sew // 8
+            elem_mask = (1 << dst_sew) - 1
             data = bytearray()
             for i in range(num_dst_elements):
                 mask_bit = (0xAA >> i) & 1
@@ -534,8 +576,10 @@ class DirectedTestGenerator:
                     # Active: use golden value
                     val = golden[i] if i < len(golden) else 0
                 else:
-                    # Masked-off: use preinit (0xDEADBEEF)
-                    val = 0xDEADBEEF
+                    # Masked-off: extract per-element preinit from 0xDEADBEEF word
+                    elems_per_word = 32 // dst_sew
+                    shift = (i % elems_per_word) * dst_sew
+                    val = (0xDEADBEEF >> shift) & elem_mask
                 for byte_idx in range(bytes_per_elem):
                     data.append((val >> (byte_idx * 8)) & 0xFF)
             for i in range(0, len(data), 4):
@@ -575,12 +619,20 @@ class DirectedTestGenerator:
         if not corner_cases or not spec.encoding.vm:
             return start_test_id
 
+        # Skip mask test for reduction operations — masked reductions have
+        # different semantics (only active elements participate in the
+        # reduction) which requires a separate golden value computation.
+        op = spec.semantics.operation
+        if op in (SemanticOp.REDUCTION_SUM, SemanticOp.REDUCTION_MAX):
+            return start_test_id
+
         cc = corner_cases[0]
         tid = start_test_id
+        mask_vl = _clamp_vl(len(cc.operand_a), src_sew)
 
         # Compute golden for verification
         try:
-            golden = _compute_golden_value(spec, cc.operand_a, cc.operand_b, engine)
+            golden = _compute_golden_value(spec, cc.operand_a, cc.operand_b, engine, vl=mask_vl)
         except Exception:
             logger.warning(
                 "Golden value computation failed for %s: %s",
@@ -591,7 +643,7 @@ class DirectedTestGenerator:
         asm.begin_test_case(tid, "Masked operation: mask=0xAA (odd elements active)")
         asm.reset_temp_gprs()
 
-        num_elements = len(cc.operand_a)
+        num_elements = _clamp_vl(len(cc.operand_a), src_sew)
         asm.emit_li("a0", num_elements)
         asm.emit_vsetvli("a0", "a0", src_sew, lmul=1, ta=True, ma=True)
 
@@ -677,8 +729,9 @@ class DirectedTestGenerator:
         dst_sew: int,
     ) -> None:
         """Add data section entries for LMUL sweep tests."""
+        src_sew = _sew_for_type(src_type)
         for lmul in [1, 2, 4]:
-            num_elements = len(cc.operand_a)
+            num_elements = _clamp_vl(len(cc.operand_a), src_sew, lmul)
             num_result_bytes = max(num_elements, 1) * (dst_sew // 8)
             if num_result_bytes < 4:
                 num_result_bytes = 4
@@ -715,8 +768,9 @@ class DirectedTestGenerator:
 
         # Compute golden at default LMUL (result should be the same
         # for same VL regardless of LMUL)
+        lmul1_vl = _clamp_vl(len(cc.operand_a), src_sew)
         try:
-            golden = _compute_golden_value(spec, cc.operand_a, cc.operand_b, engine)
+            golden = _compute_golden_value(spec, cc.operand_a, cc.operand_b, engine, vl=lmul1_vl)
         except Exception:
             logger.warning(
                 "Golden value computation failed for %s: %s",
@@ -728,7 +782,7 @@ class DirectedTestGenerator:
             asm.begin_test_case(tid, f"LMUL sweep: LMUL={lmul}")
             asm.reset_temp_gprs()
 
-            num_elements = len(cc.operand_a)
+            num_elements = _clamp_vl(len(cc.operand_a), src_sew, lmul)
             asm.emit_li("a0", num_elements)
             asm.emit_vsetvli("a0", "a0", src_sew, lmul=lmul, ta=True, ma=True)
 
@@ -798,10 +852,13 @@ class DirectedTestGenerator:
         # Compute golden result.  For accumulating instructions the vstart
         # test pre-initialises vd with 0xCAFEBABE, so golden values for
         # elements >= vstart must use that as the accumulator.
+        src_type = get_type_info(list(spec.source_operands.values())[0].element)
+        vstart_vl = _clamp_vl(len(cc.operand_a), src_type.sew_bits)
         try:
             golden = _compute_golden_value(
                 spec, cc.operand_a, cc.operand_b, engine,
                 acc_init=0xCAFEBABE if spec.semantics.accumulate else None,
+                vl=vstart_vl,
             )
         except Exception:
             logger.warning(
@@ -822,11 +879,16 @@ class DirectedTestGenerator:
         vstart_val = 2
         if golden:
             bytes_per_elem = dst_sew // 8
+            # Extract per-element preinit values from the 0xCAFEBABE word pattern.
+            # When SEW < 32, each 32-bit word contains multiple elements.
+            elem_mask = (1 << dst_sew) - 1
             data = bytearray()
             for i in range(num_dst_elements):
                 if i < vstart_val:
-                    # Unchanged: preinit value
-                    val = 0xCAFEBABE
+                    # Unchanged: extract the correct sub-word from preinit pattern
+                    elems_per_word = 32 // dst_sew
+                    shift = (i % elems_per_word) * dst_sew
+                    val = (0xCAFEBABE >> shift) & elem_mask
                 else:
                     val = golden[i] if i < len(golden) else 0
                 for byte_idx in range(bytes_per_elem):
@@ -866,10 +928,11 @@ class DirectedTestGenerator:
         cc = corner_cases[0]
         tid = start_test_id
         vstart_val = 2
+        vst_vl = _clamp_vl(len(cc.operand_a), src_sew)
 
         # Compute golden
         try:
-            golden = _compute_golden_value(spec, cc.operand_a, cc.operand_b, engine)
+            golden = _compute_golden_value(spec, cc.operand_a, cc.operand_b, engine, vl=vst_vl)
         except Exception:
             logger.warning(
                 "Golden value computation failed for %s: %s",
@@ -880,7 +943,7 @@ class DirectedTestGenerator:
         asm.begin_test_case(tid, f"vstart={vstart_val}: elements below vstart unchanged")
         asm.reset_temp_gprs()
 
-        num_elements = len(cc.operand_a)
+        num_elements = _clamp_vl(len(cc.operand_a), src_sew)
         asm.emit_li("a0", num_elements)
         asm.emit_vsetvli("a0", "a0", src_sew, lmul=1, ta=True, ma=True)
 

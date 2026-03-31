@@ -16,7 +16,7 @@ import numpy as np
 
 from rvxv.core.semantics_engine import SemanticsEngine
 from rvxv.core.spec_parser import load_spec
-from rvxv.generators.tests.test_gen import TestGenerator
+from rvxv.generators.tests.test_gen import AssemblyTestGenerator
 from rvxv.numeric.bfloat16 import BFloat16
 
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
@@ -250,7 +250,7 @@ class TestAssemblyGoldenIndependent:
     def test_int8_dot_golden_values_are_correct(self, tmp_path):
         """Extract test data from generated assembly, recompute independently."""
         specs = load_spec(EXAMPLES_DIR / "int8_dot_product.yaml")
-        gen = TestGenerator()
+        gen = AssemblyTestGenerator()
         files = gen.generate(specs, tmp_path)
 
         directed = [f for f in files if "directed" in str(f)]
@@ -283,7 +283,7 @@ class TestAssemblyGoldenIndependent:
     def test_bf16_fma_golden_values_are_correct(self, tmp_path):
         """BF16 FMA: verify golden values against independent float computation."""
         specs = load_spec(EXAMPLES_DIR / "bf16_fma.yaml")
-        gen = TestGenerator()
+        gen = AssemblyTestGenerator()
         files = gen.generate(specs, tmp_path)
 
         directed = [f for f in files if "directed" in str(f)]
@@ -305,8 +305,8 @@ class TestAssemblyGoldenIndependent:
         out1 = tmp_path / "run1"
         out2 = tmp_path / "run2"
 
-        gen1 = TestGenerator(random_seed=123, random_count=10)
-        gen2 = TestGenerator(random_seed=123, random_count=10)
+        gen1 = AssemblyTestGenerator(random_seed=123, random_count=10)
+        gen2 = AssemblyTestGenerator(random_seed=123, random_count=10)
 
         files1 = gen1.generate(specs, out1)
         files2 = gen2.generate(specs, out2)

@@ -1,6 +1,6 @@
 [submodule "extern/riscv-tests"]
 	path = extern/riscv-tests
-	url = https://github.com/riscv/riscv-tests.git
+	url = https://github.com/riscv/riscv-tests
 [submodule "extern/spike"]
 	path = extern/spike
 	url = https://github.com/riscv/riscv-isa-sim.git

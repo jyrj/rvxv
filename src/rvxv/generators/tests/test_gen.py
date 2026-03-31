@@ -27,7 +27,7 @@ from rvxv.generators.tests.directed_gen import DirectedTestGenerator
 from rvxv.generators.tests.random_gen import RandomTestGenerator
 
 
-class TestGenerator(Generator):
+class AssemblyTestGenerator(Generator):
     """Generate RISC-V assembly test suites.
 
     Produces both directed (corner-case) and constrained-random tests for

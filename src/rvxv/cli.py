@@ -68,9 +68,9 @@ def generate(
 
         if "tests" in target_list:
             click.echo("\nGenerating test suites...")
-            from rvxv.generators.tests.test_gen import TestGenerator
+            from rvxv.generators.tests.test_gen import AssemblyTestGenerator
 
-            gen = TestGenerator()
+            gen = AssemblyTestGenerator()
             files = gen.generate(specs, output_dir)
             generated_files.extend(files)
             click.echo(f"  Generated {len(files)} file(s)")
@@ -179,9 +179,9 @@ def preset(list_presets: bool, preset_name: str | None, output: str | None, targ
             generated_files.extend(files)
 
         if "tests" in target_list:
-            from rvxv.generators.tests.test_gen import TestGenerator
+            from rvxv.generators.tests.test_gen import AssemblyTestGenerator
 
-            files = TestGenerator().generate(specs, output_dir)
+            files = AssemblyTestGenerator().generate(specs, output_dir)
             generated_files.extend(files)
 
         if "assertions" in target_list:
